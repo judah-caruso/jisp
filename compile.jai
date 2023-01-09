@@ -7,6 +7,7 @@
    opts.output_executable_name = "jisp";
    set_build_options(opts, ws);
 
+   // Make sure any .jisp imports fail so we can intercept them
    remap_import(ws, "*", "*.jisp", "");
 
    compiler_begin_intercept(ws);
@@ -20,7 +21,6 @@
 
          case .FAILED_IMPORT;
             m := cast(*Message_Failed_Import)message;
-
             print(".. importing jisp file '%'\n", m.target_module_name);
 
             source, ok := read_entire_file(m.target_module_name);
@@ -39,23 +39,30 @@
 compile :: (str: string, workspace: Workspace) -> string {
    context.jisp_workspace = workspace;
 
-   builtins :: Type.[
-      bool,
-      u8,
-      u16,
-      u32,
-      u64,
-      s8,
-      s16,
-      s32,
-      s64,
-      float32,
-      float64,
-      string,
-      void,
-   ];
+   // Generate a Code_Type_Instantiation table so we don't
+   // have to build them manually.
 
+   // We make declarations that have an instantiation so
+   // we can simply get the nodes and map between the
+   // identifier and the instantiation.
    #insert -> string {
+      // Pointer types we can make on-the-fly
+      builtins :: Type.[
+         bool,
+         u8,
+         u16,
+         u32,
+         u64,
+         s8,
+         s16,
+         s32,
+         s64,
+         float32,
+         float64,
+         string,
+         void,
+      ];
+
       b: String_Builder;
 
       append(*b, "decls := Code.[\n");
@@ -71,6 +78,7 @@ compile :: (str: string, workspace: Workspace) -> string {
    Type_Table :: Table(string, *Code_Type_Instantiation);
    type_insts: Type_Table;
 
+   // Map the type name to an instantiation
    for decls {
       root  := compiler_get_nodes(it);
       decl  := cast(*Code_Declaration)root;
@@ -79,6 +87,7 @@ compile :: (str: string, workspace: Workspace) -> string {
       table_set(*type_insts, ident.name, type);
    }
 
+   // The Jisp parser starts here
    Value :: struct {
       kind: enum {
          None;
@@ -287,6 +296,8 @@ compile :: (str: string, workspace: Workspace) -> string {
       }, true;
    }
 
+   // Converts our AST nodes to Jai Code_Nodes
+
    emit_value :: (v: *Value, types: *Type_Table) -> *Code_Node, bool {
       assert(v != null);
 
@@ -307,6 +318,7 @@ compile :: (str: string, workspace: Workspace) -> string {
             return null, true;
 
          case .Directive_Import;
+            assert(false, "Because of how Program_Print handles import printing, this doesn't work. Use a @JAI_CODE block instead");
             n, ok := emit_import(v, types);
             return n, ok;
 
@@ -355,8 +367,7 @@ compile :: (str: string, workspace: Workspace) -> string {
    }
 
    emit_list :: (v: *Value, types: *Type_Table) -> *Code_Node, bool {
-      if !v.list.count return null, false;
-
+      if !v.list.count return null, true;
 
       car := v.list[0];
       if car.kind == {
@@ -391,6 +402,7 @@ compile :: (str: string, workspace: Workspace) -> string {
       return ident, true;
    }
 
+   // Everything is just a float64 in Jisp
    emit_number :: (v: *Value, types: *Type_Table) -> *Code_Node, bool {
       literal := New(Code_Literal);
 
@@ -402,6 +414,8 @@ compile :: (str: string, workspace: Workspace) -> string {
       return literal, true;
    }
 
+   // Because all numbers in Jisp are float64, we just grab the
+   // "float64" type instantiation from our table.
    emit_decl :: (v: *Value, types: *Type_Table, const := false) -> *Code_Node, bool {
       car := v.list[0];
       assert(car.kind == .Identifier, "Expected ident for decl");
@@ -428,10 +442,14 @@ compile :: (str: string, workspace: Workspace) -> string {
       return import, true;
    }
 
+   // The code for compilation starts here 
+
    source := str;
 
    values, p_ok := parse(*source);
    assert(p_ok, "Unable to parse!");
+
+   // Emit Jai Code_Nodes and call print_expression on them.
 
    b: String_Builder;
 
@@ -439,24 +457,11 @@ compile :: (str: string, workspace: Workspace) -> string {
       node, e_ok := emit_value(it, *type_insts);
       assert(e_ok, "Unable to emit!");
       if !node continue;
-
-      if node.kind == .DIRECTIVE_IMPORT {
-         tmp: String_Builder;
-         print_expression(*tmp, node);
-
-         str := builder_to_string(*tmp);
-         str  = replace(str, "#import ", "#import \"");
-         str  = replace(str, ";" , "\";");
-
-         append(*b, str);
-      }
-      else {
-         print_expression(*b, node);
-      }
-
+      print_expression(*b, node);
       append(*b, ";\n");
    }
 
+   // Give the "module" we created back to the compiler
    return builder_to_string(*b);
 }
 
