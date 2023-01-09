@@ -1,0 +1,16 @@
+(let x)
+(let y 10)
+(let z 20)
+(mut w (+ 2 (* z (- 1 y))))
+(mut a (+ 1000 (* y 5)))
+
+#run some_proc ; we can use a basic form of #run
+
+; This is a raw jai block that's passed as-is 
+@JAI_CODE
+some_proc :: () {
+   print(".. inside some_proc x %, y %, z %, w %, a %\n", x, y, z, w, a);
+}
+
+#import "Basic";
+@JAI_CODE
